@@ -6,6 +6,8 @@ import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.block.Block;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -36,7 +38,7 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(this, this);
         createHeartItem();
         createReviveBeacon();
-        getLogger().info("EMOS Lifesteal (Beacon of Life Edition) has started!");
+        getLogger().info("EMOS Lifesteal with fixed recipe has started!");
     }
 
     @Override
@@ -61,11 +63,105 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
 
         NamespacedKey key = new NamespacedKey(this, "beacon_of_life");
         ShapedRecipe recipe = new ShapedRecipe(key, reviveBeacon);
-        recipe.shape("DRD", "RNR", "DRD");
+        
+        // This creates your layout: 4 diamonds in corners, 1 nether star center, redstone in rest
+        recipe.shape(
+            "DRD", 
+            "RNR", 
+            "DRD"
+        );
+        
         recipe.setIngredient('D', Material.DIAMOND);
         recipe.setIngredient('N', Material.NETHER_STAR);
         recipe.setIngredient('R', Material.REDSTONE);
         Bukkit.addRecipe(recipe);
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (command.getName().equalsIgnoreCase("heart")) {
+            if (args.length == 0) {
+                sender.sendMessage("§cUsage: /heart withdraw | /heart give <player> <item/beacon> | /heart set <player> <hearts>");
+                return true;
+            }
+
+            if (args[0].equalsIgnoreCase("withdraw")) {
+                if (!(sender instanceof Player)) {
+                    sender.sendMessage("§cOnly players can withdraw hearts!");
+                    return true;
+                }
+                Player player = (Player) sender;
+                double maxHealth = player.getMaxHealth();
+
+                if (maxHealth <= 20.0) {
+                    player.sendMessage("§cYou cannot withdraw any more hearts! You are at baseline health.");
+                    return true;
+                }
+
+                player.setMaxHealth(maxHealth - 2.0);
+                player.getInventory().addItem(heartItem.clone());
+                player.sendMessage("§aSuccessfully withdrew 1 heart container into your inventory!");
+                return true;
+            }
+
+            if (args[0].equalsIgnoreCase("give")) {
+                if (!sender.hasPermission("lifesteal.admin") && !sender.isOp()) {
+                    sender.sendMessage("§cYou do not have permission to use this command.");
+                    return true;
+                }
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /heart give <player> <item/beacon>");
+                    return true;
+                }
+
+                Player target = Bukkit.getPlayer(args[1]);
+                if (target == null) {
+                    sender.sendMessage("§cPlayer not found.");
+                    return true;
+                }
+
+                if (args[2].equalsIgnoreCase("beacon")) {
+                    target.getInventory().addItem(reviveBeacon.clone());
+                    sender.sendMessage("§aGave 1 Beacon of Life to " + target.getName());
+                } else if (args[2].equalsIgnoreCase("item")) {
+                    target.getInventory().addItem(heartItem.clone());
+                    sender.sendMessage("§aGave 1 Extra Heart Container to " + target.getName());
+                } else {
+                    sender.sendMessage("§cInvalid type! Use 'item' or 'beacon'.");
+                }
+                return true;
+            }
+
+            if (args[0].equalsIgnoreCase("set")) {
+                if (!sender.hasPermission("lifesteal.admin") && !sender.isOp()) {
+                    sender.sendMessage("§cYou do not have permission to use this command.");
+                    return true;
+                }
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /heart set <player> <amount of hearts>");
+                    return true;
+                }
+
+                Player target = Bukkit.getPlayer(args[1]);
+                if (target == null) {
+                    sender.sendMessage("§cPlayer not found.");
+                    return true;
+                }
+
+                try {
+                    int hearts = Integer.parseInt(args[2]);
+                    double targetHP = hearts * 2.0;
+                    target.setMaxHealth(targetHP);
+                    target.setHealth(targetHP);
+                    sender.sendMessage("§aSet " + target.getName() + "'s maximum health to " + hearts + " hearts!");
+                    target.sendMessage("§aAn administrator set your maximum health to " + hearts + " hearts.");
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("§cPlease provide a valid whole number for hearts.");
+                }
+                return true;
+            }
+        }
+        return false;
     }
 
     @EventHandler
@@ -92,7 +188,6 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         ItemStack item = event.getItem();
 
-        // 1. Handle eating the Heart Container
         if (item != null && item.hasItemMeta() && "§c§lExtra Heart Container".equals(item.getItemMeta().getDisplayName())) {
             if (event.getAction() == Action.RIGHT_CLICK_AIR || event.getAction() == Action.RIGHT_CLICK_BLOCK) {
                 event.setCancelled(true);
@@ -108,18 +203,15 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
             }
         }
 
-        // 2. Handle right-clicking the placed Beacon of Life block
         if (event.getAction() == Action.RIGHT_CLICK_BLOCK) {
             Block clickedBlock = event.getClickedBlock();
             if (clickedBlock != null && clickedBlock.getType() == Material.BEACON) {
-                // Open the GUI menu populated with banned players
                 openReviveMenu(player);
-                event.setCancelled(true); // Stop standard beacon window from opening
+                event.setCancelled(true);
             }
         }
     }
 
-    // Prevents placing the beacon normally if no one is banned
     @EventHandler
     public void onBlockPlace(BlockPlaceEvent event) {
         ItemStack item = event.getItemInHand();
@@ -133,20 +225,16 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
 
     private void openReviveMenu(Player player) {
         List<OfflinePlayer> bannedPlayers = new ArrayList<>(Bukkit.getBannedPlayers());
-        
         if (bannedPlayers.isEmpty()) {
             player.sendMessage("§cThere are no eliminated players to revive right now!");
             return;
         }
 
-        // Create a chest GUI layout (up to 54 slots, 9 slots per row)
         int size = ((bannedPlayers.size() / 9) + 1) * 9;
         if (size > 54) size = 54;
-        
         Inventory inv = Bukkit.createInventory(null, size, menuTitle);
 
         for (OfflinePlayer banned : bannedPlayers) {
-            // Material.SKULL_ITEM with data value 3 makes a player head item in 1.12.2
             ItemStack skull = new ItemStack(Material.getMaterial("SKULL_ITEM"), 1, (short) 3);
             SkullMeta meta = (SkullMeta) skull.getItemMeta();
             meta.setOwningPlayer(banned);
@@ -155,29 +243,22 @@ public class LifestealPlugin extends JavaPlugin implements Listener {
             skull.setItemMeta(meta);
             inv.addItem(skull);
         }
-
         player.openInventory(inv);
     }
 
-    // Handles picking a player inside the GUI
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (!menuTitle.equals(event.getView().getTitle())) return;
-        
-        event.setCancelled(true); // Stop players from taking heads out of the GUI
-        
+        event.setCancelled(true);
         if (event.getCurrentItem() == null || event.getCurrentItem().getType() == Material.AIR) return;
         
         Player player = (Player) event.getWhoClicked();
         ItemStack clickedItem = event.getCurrentItem();
         
         if (clickedItem.hasItemMeta()) {
-            String targetName = clickedItem.getItemMeta().getDisplayName().substring(2); // Strip color code
-            
-            // Pardon the target
+            String targetName = clickedItem.getItemMeta().getDisplayName().substring(2);
             Bukkit.getBanList(BanList.Type.NAME).pardon(targetName);
             
-            // Consume the Beacon block directly under/around the player's view
             Block targetBlock = player.getTargetBlock((java.util.Set<Material>) null, 5);
             if (targetBlock != null && targetBlock.getType() == Material.BEACON) {
                 targetBlock.setType(Material.AIR);
